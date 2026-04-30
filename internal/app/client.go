@@ -26,33 +26,83 @@ func ParseNetwork(value string) Network {
 }
 
 type StatsResponse struct {
-	GeneratedAt   time.Time `json:"generated_at"`
-	DataFreshness string    `json:"data_freshness"`
-	Ledger        Ledger    `json:"ledger"`
-
-	Transactions24h *Transactions24h `json:"transactions_24h,omitempty"`
-	Operations24h   *Operations24h   `json:"operations_24h,omitempty"`
+	Network     string     `json:"network"`
+	GeneratedAt time.Time  `json:"generated_at"`
+	Header      Header     `json:"header"`
+	Hero        Hero       `json:"hero"`
+	Meta        Meta       `json:"meta"`
+	Provenance  Provenance `json:"provenance"`
 }
 
-type Ledger struct {
-	LatestSequence       int64     `json:"latest_sequence"`
-	LatestHash           string    `json:"latest_hash"`
-	ClosedAt             time.Time `json:"closed_at"`
-	ProtocolVersion      int       `json:"protocol_version"`
-	AvgCloseTimeSeconds  float64   `json:"avg_close_time_seconds"`
+type Header struct {
+	LatestLedgerSequence int64     `json:"latest_ledger_sequence"`
+	LatestLedgerClosedAt time.Time `json:"latest_ledger_closed_at"`
 }
 
-type Transactions24h struct {
-	Total            int64 `json:"total"`
-	Successful       int64 `json:"successful"`
-	Failed           int64 `json:"failed"`
-	SorobanCount     int64 `json:"soroban_count"`
-	TotalFeesCharged int64 `json:"total_fees_charged"`
+type Hero struct {
+	Health      Health       `json:"health"`
+	LatestLedger LatestLedger `json:"latest_ledger"`
+	Cadence     Cadence      `json:"cadence"`
+	Contracts   Contracts    `json:"contracts"`
+	Soroban     Soroban      `json:"soroban"`
+	Trends      Trends       `json:"trends"`
+	TTL         TTL          `json:"ttl"`
+	ActivityMix ActivityMix  `json:"activity_mix"`
 }
 
-type Operations24h struct {
-	Total          int64 `json:"total"`
-	SorobanOpCount int64 `json:"soroban_op_count"`
+type Health struct {
+	Status       string `json:"status"`
+	LoadBand     string `json:"load_band"`
+	ActivityBand string `json:"activity_band"`
+}
+
+type LatestLedger struct {
+	Sequence         int64     `json:"sequence"`
+	ClosedAt         time.Time `json:"closed_at"`
+	TransactionCount int64     `json:"transaction_count"`
+	OperationCount   int64     `json:"operation_count"`
+}
+
+type Cadence struct {
+	AvgCloseSeconds       float64 `json:"avg_close_seconds"`
+	TxPerLedgerRecentAvg  float64 `json:"tx_per_ledger_recent_avg"`
+	OpsPerLedgerRecentAvg float64 `json:"ops_per_ledger_recent_avg"`
+}
+
+type Contracts struct {
+	Active24h int64 `json:"active_24h"`
+}
+
+type Soroban struct {
+	InstructionPct float64 `json:"instruction_pct"`
+	ReadWritePct   float64 `json:"read_write_pct"`
+}
+
+type Trends struct {
+	TxVs24hAvgPct   float64 `json:"tx_vs_24h_avg_pct"`
+	AnomalyDetected bool    `json:"anomaly_detected"`
+}
+
+type TTL struct {
+	ExpiringContractCount int64 `json:"expiring_contract_count"`
+	WorstRemainingHours   int64 `json:"worst_remaining_hours"`
+	WorstRemainingLedgers int64 `json:"worst_remaining_ledgers"`
+}
+
+type ActivityMix struct {
+	SwapTx24h         int64 `json:"swap_tx_24h"`
+	ContractCallTx24h int64 `json:"contract_call_tx_24h"`
+}
+
+type Meta struct {
+	LatestLedgerAgeSeconds int64 `json:"latest_ledger_age_seconds"`
+}
+
+type Provenance struct {
+	Route      string   `json:"route"`
+	DataSource string   `json:"data_source"`
+	Partial    bool     `json:"partial"`
+	Warnings   []string `json:"warnings"`
 }
 
 type Client struct {
@@ -75,13 +125,15 @@ func (c *Client) NetworkStats(ctx context.Context, network Network) (StatsRespon
 		return stats, fmt.Errorf("OBSRVR_API_KEY is not configured")
 	}
 
-	url := fmt.Sprintf("%s/%s/api/v1/silver/stats/network", strings.TrimRight(c.BaseURL, "/"), network)
+	url := fmt.Sprintf("%s/%s/api/v1/home/summary?_=%d", strings.TrimRight(c.BaseURL, "/"), network, time.Now().UnixNano())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return stats, err
 	}
 	req.Header.Set("Authorization", "Api-Key "+c.APIKey)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

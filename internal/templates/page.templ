@@ -13,8 +13,16 @@ templ Layout(data app.PageData) {
 			<link rel="preconnect" href="https://fonts.googleapis.com"/>
 			<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 			<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+			<script>
+				(function() {
+					var saved = localStorage.getItem("theme");
+					var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+					document.documentElement.dataset.theme = saved || (prefersDark ? "dark" : "light");
+				})();
+			</script>
 			<link rel="stylesheet" href="/static/styles.css"/>
 			<script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+			<script src="/static/theme.js" defer></script>
 		</head>
 		<body>
 			@App(data)
@@ -25,21 +33,32 @@ templ Layout(data app.PageData) {
 templ App(data app.PageData) {
 	<main id="app" class="shell">
 		<header class="topbar">
-			<a class="brand" href="/">
-				<span class="brand-mark"></span>
-				<span>Latest Ledger</span>
+			<a class="brand" href="/" aria-label="Latest Ledger home">
+				<span class="brand-mark" aria-hidden="true">
+					<svg viewBox="0 0 30 24" role="img">
+						<rect class="teal" x="2" y="8" width="3" height="11" rx="1"></rect>
+						<rect class="violet" x="7" y="5" width="3" height="14" rx="1"></rect>
+						<rect class="coral" x="12" y="3" width="3" height="16" rx="1"></rect>
+						<rect class="olive" x="17" y="7" width="3" height="12" rx="1"></rect>
+						<rect class="blue" x="22" y="5" width="3" height="14" rx="1"></rect>
+					</svg>
+				</span>
+				<span class="brand-word">latestledger<span class="brand-dot">.</span>com</span>
 			</a>
-			<nav class="network-toggle" aria-label="Network">
-				<a class={ networkClass(data.Network, app.NetworkMainnet) } href="/?network=mainnet" hx-get="/app?network=mainnet" hx-target="#app" hx-swap="outerHTML" hx-push-url="/?network=mainnet">Mainnet</a>
-				<a class={ networkClass(data.Network, app.NetworkTestnet) } href="/?network=testnet" hx-get="/app?network=testnet" hx-target="#app" hx-swap="outerHTML" hx-push-url="/?network=testnet">Testnet</a>
-			</nav>
+			<div class="topbar-actions">
+				<nav class="network-toggle" aria-label="Network">
+					<a class={ networkClass(data.Network, app.NetworkMainnet) } href="/?network=mainnet" hx-get="/app?network=mainnet" hx-target="#app" hx-swap="outerHTML" hx-push-url="/?network=mainnet">Mainnet</a>
+					<a class={ networkClass(data.Network, app.NetworkTestnet) } href="/?network=testnet" hx-get="/app?network=testnet" hx-target="#app" hx-swap="outerHTML" hx-push-url="/?network=testnet">Testnet</a>
+				</nav>
+				<button class="theme-toggle" type="button" data-theme-toggle aria-label="Toggle dark mode" aria-pressed="false">☾</button>
+			</div>
 		</header>
 		@Dashboard(data)
 	</main>
 }
 
 templ Dashboard(data app.PageData) {
-	<section class="hero" hx-get={ "/fragment?network=" + string(data.Network) } hx-trigger="every 10s" hx-swap="outerHTML">
+	<section class="hero" hx-get={ "/fragment?network=" + string(data.Network) } hx-trigger="every 3s" hx-swap="outerHTML">
 		<div class="eyebrow">Stellar { string(data.Network) } network tip</div>
 		if data.Error != "" {
 			<div class="error-card">
@@ -49,38 +68,44 @@ templ Dashboard(data app.PageData) {
 		} else {
 			<div class="status-row">
 				if data.IsCaughtUp() {
-					<span class="pill ok">Caught up</span>
+					<span class="pill ok">{ data.HealthStatus() }</span>
 				} else {
-					<span class="pill warn">Filling / lagging</span>
+					<span class="pill warn">{ data.HealthStatus() }</span>
 				}
-				<span class="muted mono">closed { data.Lag() } ago</span>
+				if data.HasClosedAt() {
+					<span class="muted mono">closed { data.Lag() } ago</span>
+				} else {
+					<span class="muted mono">latest close time unavailable</span>
+				}
 			</div>
-			<h1 class="ledger-number">{ app.FormatInt(data.Stats.Ledger.LatestSequence) }</h1>
-			<p class="lead">Latest closed ledger observed from the Obsrvr Gateway silver network stats endpoint.</p>
-			<div class="stats-grid">
-				@StatCard("Latest hash", app.ShortHash(data.Stats.Ledger.LatestHash), data.Stats.Ledger.LatestHash)
-				@StatCard("Closed at", app.FormatTime(data.Stats.Ledger.ClosedAt), "")
-				@StatCard("Protocol", app.FormatInt(int64(data.Stats.Ledger.ProtocolVersion)), "")
-				@StatCard("Avg close time", app.FormatFloat(data.Stats.Ledger.AvgCloseTimeSeconds) + "s", "")
+			<h1 class="ledger-number">{ app.FormatInt(data.Sequence()) }</h1>
+			<div class="refresh-progress" aria-hidden="true"><span></span></div>
+			<div class="ledger-meta mono">
+				<span>closed { app.FormatTime(data.ClosedAt()) }</span>
+				<span>target { app.FormatFloat(data.Stats.Hero.Cadence.AvgCloseSeconds) }s</span>
+				<span>load { data.Stats.Hero.Health.LoadBand }</span>
+				<span>activity { data.Stats.Hero.Health.ActivityBand }</span>
 			</div>
-			if data.Stats.Transactions24h != nil || data.Stats.Operations24h != nil {
-				<div class="section-label">Last 24 hours</div>
-				<div class="stats-grid compact">
-					if data.Stats.Transactions24h != nil {
-						@StatCard("Transactions", app.FormatInt(data.Stats.Transactions24h.Total), "")
-						@StatCard("Successful", app.FormatInt(data.Stats.Transactions24h.Successful), "")
-						@StatCard("Failed", app.FormatInt(data.Stats.Transactions24h.Failed), "")
-						@StatCard("Soroban tx", app.FormatInt(data.Stats.Transactions24h.SorobanCount), "")
-					}
-					if data.Stats.Operations24h != nil {
-						@StatCard("Operations", app.FormatInt(data.Stats.Operations24h.Total), "")
-						@StatCard("Soroban ops", app.FormatInt(data.Stats.Operations24h.SorobanOpCount), "")
-					}
-				</div>
-			}
+			<div class="summary-strip">
+				@SummaryCell("Latest tx", app.FormatInt(data.Stats.Hero.LatestLedger.TransactionCount), "avg " + app.FormatFloat(data.Stats.Hero.Cadence.TxPerLedgerRecentAvg) + " / ledger")
+				@SummaryCell("Latest ops", app.FormatInt(data.Stats.Hero.LatestLedger.OperationCount), "avg " + app.FormatFloat(data.Stats.Hero.Cadence.OpsPerLedgerRecentAvg) + " / ledger")
+				if data.Stats.Hero.ActivityMix.ContractCallTx24h > 0 {
+					@SummaryCell("Contract calls", app.FormatInt(data.Stats.Hero.ActivityMix.ContractCallTx24h), "24h")
+				} else {
+					@SummaryCell("Active contracts", app.FormatInt(data.Stats.Hero.Contracts.Active24h), "24h")
+				}
+				if data.Stats.Hero.TTL.ExpiringContractCount > 0 {
+					@SummaryCell("TTL risk", app.FormatInt(data.Stats.Hero.TTL.ExpiringContractCount), "contracts")
+				} else if data.Stats.Provenance.Partial {
+					@SummaryCell("Data", "partial", "summary")
+				} else {
+					@SummaryCell("Data", "complete", "summary")
+				}
+			</div>
 			<footer class="meta mono">
+				<span>last checked { app.FormatTime(data.Now) }</span>
 				<span>generated { app.FormatTime(data.Stats.GeneratedAt) }</span>
-				<span>freshness: { data.Stats.DataFreshness }</span>
+				<span>source: { data.Stats.Provenance.Route }</span>
 			</footer>
 		}
 	</section>
@@ -91,6 +116,14 @@ templ StatCard(label string, value string, title string) {
 		<div class="stat-label">{ label }</div>
 		<div class="stat-value" title={ title }>{ value }</div>
 	</article>
+}
+
+templ SummaryCell(label string, value string, detail string) {
+	<div class="summary-cell">
+		<div class="stat-label">{ label }</div>
+		<div class="stat-value">{ value }</div>
+		<div class="summary-detail">{ detail }</div>
+	</div>
 }
 
 func networkClass(current app.Network, target app.Network) string {

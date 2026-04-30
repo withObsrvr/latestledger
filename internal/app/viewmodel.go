@@ -14,18 +14,46 @@ type PageData struct {
 	Now     time.Time
 }
 
+func (p PageData) Sequence() int64 {
+	if p.Stats.Hero.LatestLedger.Sequence != 0 {
+		return p.Stats.Hero.LatestLedger.Sequence
+	}
+	return p.Stats.Header.LatestLedgerSequence
+}
+
+func (p PageData) ClosedAt() time.Time {
+	if !p.Stats.Hero.LatestLedger.ClosedAt.IsZero() {
+		return p.Stats.Hero.LatestLedger.ClosedAt
+	}
+	return p.Stats.Header.LatestLedgerClosedAt
+}
+
+func (p PageData) HasClosedAt() bool {
+	return !p.ClosedAt().IsZero()
+}
+
+func (p PageData) HealthStatus() string {
+	if p.Stats.Hero.Health.Status == "" {
+		return "unknown"
+	}
+	return p.Stats.Hero.Health.Status
+}
+
 func (p PageData) IsCaughtUp() bool {
-	if p.Stats.Ledger.ClosedAt.IsZero() {
+	if strings.EqualFold(p.HealthStatus(), "halted") {
 		return false
 	}
-	return p.Now.Sub(p.Stats.Ledger.ClosedAt) <= 2*time.Minute
+	if !p.HasClosedAt() {
+		return true
+	}
+	return p.Now.Sub(p.ClosedAt()) <= 2*time.Minute
 }
 
 func (p PageData) Lag() string {
-	if p.Stats.Ledger.ClosedAt.IsZero() {
+	if !p.HasClosedAt() {
 		return "unknown"
 	}
-	return HumanDuration(p.Now.Sub(p.Stats.Ledger.ClosedAt))
+	return HumanDuration(p.Now.Sub(p.ClosedAt()))
 }
 
 func FormatInt(n int64) string {
