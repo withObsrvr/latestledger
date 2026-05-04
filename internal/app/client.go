@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -109,31 +110,121 @@ type Client struct {
 	HTTP    *http.Client
 	BaseURL string
 	APIKey  string
+
+	mu    sync.Mutex
+	cache map[Network]*cacheEntry
 }
+
+type cacheEntry struct {
+	stats      StatsResponse
+	fetchedAt  time.Time
+	refreshing bool
+	hasData    bool
+	err        error
+	ready      chan struct{}
+}
+
+const cacheTTL = 5 * time.Second
 
 func NewClient(apiKey string) *Client {
 	return &Client{
-		HTTP: &http.Client{Timeout: 10 * time.Second},
+		HTTP:    &http.Client{Timeout: 45 * time.Second},
 		BaseURL: "https://gateway.withobsrvr.com/lake/v1",
-		APIKey: apiKey,
+		APIKey:  apiKey,
+		cache:   make(map[Network]*cacheEntry),
 	}
 }
 
 func (c *Client) NetworkStats(ctx context.Context, network Network) (StatsResponse, error) {
-	var stats StatsResponse
 	if c.APIKey == "" {
-		return stats, fmt.Errorf("OBSRVR_API_KEY is not configured")
+		return StatsResponse{}, fmt.Errorf("OBSRVR_API_KEY is not configured")
 	}
 
-	url := fmt.Sprintf("%s/%s/api/v1/home/summary?_=%d", strings.TrimRight(c.BaseURL, "/"), network, time.Now().UnixNano())
+	now := time.Now()
+	c.mu.Lock()
+	entry := c.cache[network]
+	if entry != nil && entry.hasData {
+		stats := entry.stats
+		stale := now.Sub(entry.fetchedAt) > cacheTTL
+		if stale && !entry.refreshing {
+			entry.refreshing = true
+			go c.refreshNetworkStats(network)
+		}
+		c.mu.Unlock()
+		return stats, nil
+	}
+	if entry != nil && entry.refreshing {
+		ready := entry.ready
+		c.mu.Unlock()
+		select {
+		case <-ready:
+			c.mu.Lock()
+			stats, err, hasData := entry.stats, entry.err, entry.hasData
+			c.mu.Unlock()
+			if hasData {
+				return stats, nil
+			}
+			return StatsResponse{}, err
+		case <-ctx.Done():
+			return StatsResponse{}, ctx.Err()
+		}
+	}
+	if entry == nil {
+		entry = &cacheEntry{}
+		c.cache[network] = entry
+	}
+	entry.refreshing = true
+	entry.ready = make(chan struct{})
+	ready := entry.ready
+	c.mu.Unlock()
+
+	stats, err := c.fetchNetworkStats(ctx, network)
+
+	c.mu.Lock()
+	entry.refreshing = false
+	entry.err = err
+	if err == nil {
+		entry.stats = stats
+		entry.fetchedAt = time.Now()
+		entry.hasData = true
+	}
+	close(ready)
+	c.mu.Unlock()
+
+	return stats, err
+}
+
+func (c *Client) refreshNetworkStats(network Network) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	stats, err := c.fetchNetworkStats(ctx, network)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.cache[network]
+	if entry == nil {
+		entry = &cacheEntry{}
+		c.cache[network] = entry
+	}
+	entry.refreshing = false
+	entry.err = err
+	if err == nil {
+		entry.stats = stats
+		entry.fetchedAt = time.Now()
+		entry.hasData = true
+	}
+}
+
+func (c *Client) fetchNetworkStats(ctx context.Context, network Network) (StatsResponse, error) {
+	var stats StatsResponse
+	url := fmt.Sprintf("%s/%s/api/v1/home/summary", strings.TrimRight(c.BaseURL, "/"), network)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return stats, err
 	}
 	req.Header.Set("Authorization", "Api-Key "+c.APIKey)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
